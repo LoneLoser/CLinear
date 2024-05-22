@@ -95,11 +95,11 @@ class Model(nn.Module):
             LongTermPeriodConv(self.channels[i], self.channels[i + 1], self.drop_prob, self.conv_activation) for i in range(len(self.channels) - 1)
         ])
 
-        # if self.covar_layers > 0:
-        #     self.covar_blocks = nn.Sequential(*[
-        #         CovariateConv(self.n_vars, self.drop_prob, self.conv_activation) for _ in range(self.covar_layers)
-        #     ])
-        #     self.covar_linear = LinearLayer(self.feedback_len, 1, self.drop_prob, self.fc_activation)
+        if self.covar_layers > 0:
+            self.covar_blocks = nn.Sequential(*[
+                CovariateConv(self.n_vars, self.drop_prob, self.conv_activation) for _ in range(self.covar_layers)
+            ])
+            self.covar_linear = LinearLayer(self.feedback_len, 1, self.drop_prob, self.fc_activation)
 
         self.period_linear = LinearLayer(self.channels[-1] * self.lb_period_num, 1, self.drop_prob, self.fc_activation)
         self.lb_term_linear = LinearLayer(self.channels[-1] * self.period, 1, self.drop_prob, self.fc_activation)
@@ -115,13 +115,13 @@ class Model(nn.Module):
         y_conv_feat = self.conv_blocks(y_lookback_view)
 
         y_conv_period = rearrange(y_conv_feat, 'b c l p -> b p (c l)')
-        y_period_feat = self.period_linear(y_conv_period)  # 周期规律[-1,p,1]
+        y_period_feat = self.period_linear(y_conv_period)  # [-1,p,1]
         y_period_feat = y_period_feat.squeeze(-1)
         y_feedback_period = y_period_feat.repeat(1, self.fb_period_num)[:, -self.feedback_len:]  # [-1,f]
         y_horizon_period = y_period_feat.repeat(1, self.hd_period_num)[:, :self.horizon_len]  # [-1,h]
 
         y_conv_term = rearrange(y_conv_feat, 'b c l p -> b l (c p)')
-        y_lb_term_feat = self.lb_term_linear(y_conv_term)  # 长期趋势[-1,l/p,1]
+        y_lb_term_feat = self.lb_term_linear(y_conv_term)  # [-1,l/p,1]
         y_lb_term_feat = y_lb_term_feat.squeeze(-1)
         y_hb_term_feat = self.hd_term_linear(y_lb_term_feat)  # [-1,h/p]
         y_lb_term_feat = y_lb_term_feat.unsqueeze(-1).repeat(1, 1, self.period).flatten(1)
@@ -129,27 +129,27 @@ class Model(nn.Module):
         y_feedback_term = y_lb_term_feat[:, -self.feedback_len:]  # [-1,f]
         y_horizon_term = y_hb_term_feat[:, :self.horizon_len]  # [-1,h]
 
-        y_residual_feat = self.residual_linear(y_lookback[:, -self.feedback_len:])  # 短期趋势[-1,f]
+        y_residual_feat = self.residual_linear(y_lookback[:, -self.feedback_len:])  # [-1,f]
         y_feedback_residual = y_residual_feat[:, :self.feedback_len]
         y_horizon_residual = y_residual_feat[:, self.feedback_len:]
 
         y_feedback = y_feedback_period + y_feedback_term + y_feedback_residual
         y_horizon = y_horizon_period + y_horizon_term + y_horizon_residual
 
-        # if self.covar_layers > 0:
-        #     covar_lookback = rearrange(batch_y, 'b l n -> b 1 n l')[:, :, :, -self.feedback_len:]  # [b,1,n,f]
-        #     y_covar_feat = self.covar_blocks(covar_lookback)  # 协方差特征[b,1,n,f]
-        #
-        #     y_covar_feat = self.covar_linear(y_covar_feat)  # [b,1,n,1]
-        #     y_covar_feat = y_covar_feat.squeeze(1).repeat(1, 1, self.feedback_len + self.horizon_len)
-        #     y_covar_feat = rearrange(y_covar_feat, 'b n l -> (b n) l')
-        #     y_feedback_covar = y_covar_feat[:, :self.feedback_len]  # [-1,f]
-        #     y_horizon_covar = y_covar_feat[:, self.feedback_len:]  # [-1,h]
-        #
-        #     y_feedback += y_feedback_covar
-        #     y_horizon += y_horizon_covar
+        if self.covar_layers > 0:
+            covar_lookback = rearrange(batch_y, 'b l n -> b 1 n l')[:, :, :, -self.feedback_len:]  # [b,1,n,f]
+            y_covar_feat = self.covar_blocks(covar_lookback)  # [b,1,n,f]
 
-        y_feedback_noise = y_feedback - y_lookback[:, -self.feedback_len:]  # 噪音[-1,f]
+            y_covar_feat = self.covar_linear(y_covar_feat)  # [b,1,n,1]
+            y_covar_feat = y_covar_feat.squeeze(1).repeat(1, 1, self.feedback_len + self.horizon_len)
+            y_covar_feat = rearrange(y_covar_feat, 'b n l -> (b n) l')
+            y_feedback_covar = y_covar_feat[:, :self.feedback_len]  # [-1,f]
+            y_horizon_covar = y_covar_feat[:, self.feedback_len:]  # [-1,h]
+
+            y_feedback += y_feedback_covar
+            y_horizon += y_horizon_covar
+
+        y_feedback_noise = y_feedback - y_lookback[:, -self.feedback_len:]  # [-1,f]
         y_horizon_noise = self.noise_linear(y_feedback_noise)  # [-1,h]
 
         pred = y_horizon + y_horizon_noise
