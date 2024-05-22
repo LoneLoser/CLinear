@@ -3,7 +3,6 @@ from torch import nn
 from einops import rearrange
 from math import ceil
 
-
 def get_activation(name):
     return {
         'none': nn.Identity,
@@ -112,25 +111,25 @@ class Model(nn.Module):
         # batch_y: [Batch, Lookback length, Vars]
         y_lookback = rearrange(batch_y, 'b l n -> (b n) l')
 
-        y_lookback_view = rearrange(y_lookback, 'b (p s) -> b 1 p s', p=self.lb_period_num, s=self.period)  # [b,1,l/s,s]
+        y_lookback_view = rearrange(y_lookback, 'b (l p) -> b 1 l p', l=self.lb_period_num, p=self.period)  # [b,1,l/p,p]
         y_conv_feat = self.conv_blocks(y_lookback_view)
 
-        y_conv_period = rearrange(y_conv_feat, 'b c p s -> b s (c p)')
-        y_period_feat = self.period_linear(y_conv_period)  # 周期特征[-1,24,1]
+        y_conv_period = rearrange(y_conv_feat, 'b c l p -> b p (c l)')
+        y_period_feat = self.period_linear(y_conv_period)  # 周期规律[-1,p,1]
         y_period_feat = y_period_feat.squeeze(-1)
         y_feedback_period = y_period_feat.repeat(1, self.fb_period_num)[:, -self.feedback_len:]  # [-1,f]
         y_horizon_period = y_period_feat.repeat(1, self.hd_period_num)[:, :self.horizon_len]  # [-1,h]
 
-        y_conv_term = rearrange(y_conv_feat, 'b c p s -> b p (c s)')
-        y_lb_term_feat = self.lb_term_linear(y_conv_term)  # 长期特征[-1,l/s,1]
+        y_conv_term = rearrange(y_conv_feat, 'b c l p -> b l (c p)')
+        y_lb_term_feat = self.lb_term_linear(y_conv_term)  # 长期趋势[-1,l/p,1]
         y_lb_term_feat = y_lb_term_feat.squeeze(-1)
-        y_hb_term_feat = self.hd_term_linear(y_lb_term_feat)  # [-1,h/s]
+        y_hb_term_feat = self.hd_term_linear(y_lb_term_feat)  # [-1,h/p]
         y_lb_term_feat = y_lb_term_feat.unsqueeze(-1).repeat(1, 1, self.period).flatten(1)
         y_hb_term_feat = y_hb_term_feat.unsqueeze(-1).repeat(1, 1, self.period).flatten(1)
         y_feedback_term = y_lb_term_feat[:, -self.feedback_len:]  # [-1,f]
         y_horizon_term = y_hb_term_feat[:, :self.horizon_len]  # [-1,h]
 
-        y_residual_feat = self.residual_linear(y_lookback[:, -self.feedback_len:])  # 残差[-1,f+h]
+        y_residual_feat = self.residual_linear(y_lookback[:, -self.feedback_len:])  # 短期趋势[-1,f]
         y_feedback_residual = y_residual_feat[:, :self.feedback_len]
         y_horizon_residual = y_residual_feat[:, self.feedback_len:]
 
